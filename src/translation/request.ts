@@ -81,6 +81,8 @@ function convertTools(tools: any[] | undefined): unknown[] | undefined {
   return tools
     .filter((t) => {
       if (t.type === 'web_search' || t.type === 'mcp') return false;
+      const name = t.name || t.function?.name;
+      if (!name) return false;
       return true;
     })
     .map((t) => {
