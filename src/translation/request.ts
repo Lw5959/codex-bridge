@@ -4,6 +4,7 @@ import type {
   AnthropicMessage,
   AnthropicContentBlock,
   AnthropicRequest,
+  MCPServer,
 } from '../types';
 
 const REASONING_EFFORT_BUDGET: Record<string, number> = {
@@ -75,34 +76,54 @@ function inputItemsToAnthropicMessages(input: CodexInputItem[] | string | undefi
   return messages;
 }
 
-function convertTools(tools: any[] | undefined): unknown[] | undefined {
-  if (!tools?.length) return undefined;
+function convertTools(tools: any[] | undefined): { tools: unknown[]; mcpServers: MCPServer[] } {
+  const resultTools: unknown[] = [];
+  const mcpServers: MCPServer[] = [];
 
-  return tools
-    .filter((t) => {
-      if (t.type === 'web_search' || t.type === 'mcp') return false;
-      const name = t.name || t.function?.name;
-      if (!name) return false;
-      return true;
-    })
-    .map((t) => {
-      const fn: any = {
-        name: t.name || t.function?.name || '',
-        description: t.description || t.function?.description || '',
-      };
-      if (t.parameters || t.function?.parameters) {
-        fn.input_schema = t.parameters || t.function?.parameters;
-      } else if (t.type === 'custom' && t.format) {
-        fn.input_schema = {
-          type: 'object',
-          properties: { _raw_format: { type: 'string', description: t.format?.syntax || '' } },
-          required: [],
-        };
-      } else {
-        fn.input_schema = { type: 'object', properties: {} };
+  if (!tools?.length) return { tools: resultTools, mcpServers };
+
+  for (const t of tools) {
+    // Handle MCP server tools
+    if (t.type === 'mcp' || t.mcp_server) {
+      const mcpServer = t.mcp_server;
+      if (mcpServer) {
+        mcpServers.push({
+          name: t.name || t.function?.name || '',
+          command: mcpServer.command,
+          args: mcpServer.args,
+          env: mcpServer.env,
+        });
       }
-      return fn;
-    });
+      continue;
+    }
+
+    // Skip web_search tools (not supported by Anthropic)
+    if (t.type === 'web_search') continue;
+
+    // Convert regular function tools
+    const fn: any = {
+      name: t.name || t.function?.name || '',
+      description: t.description || t.function?.description || '',
+    };
+    if (t.parameters || t.function?.parameters) {
+      fn.input_schema = t.parameters || t.function?.parameters;
+    } else if (t.type === 'custom' && t.format) {
+      fn.input_schema = {
+        type: 'object',
+        properties: { _raw_format: { type: 'string', description: t.format?.syntax || '' } },
+        required: [],
+      };
+    } else {
+      fn.input_schema = { type: 'object', properties: {} };
+    }
+
+    // Only add if has a valid name
+    if (fn.name) {
+      resultTools.push(fn);
+    }
+  }
+
+  return { tools: resultTools, mcpServers };
 }
 
 function convertToolChoice(toolChoice: any): unknown {
@@ -161,13 +182,16 @@ export function translateCodexToAnthropicRequest(
     body.thinking = { type: 'enabled', budget_tokens: budget };
   }
 
-  // Tools
-  const tools = convertTools(req.tools);
-  if (tools?.length) {
+  // Tools & MCP servers
+  const { tools, mcpServers } = convertTools(req.tools);
+  if (tools.length > 0) {
     body.tools = tools;
     if (req.tool_choice !== undefined) {
       body.tool_choice = convertToolChoice(req.tool_choice);
     }
+  }
+  if (mcpServers.length > 0) {
+    body.mcp_servers = mcpServers;
   }
 
   // Temperature / top_p

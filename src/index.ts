@@ -62,6 +62,7 @@ app.post("/v1/responses", async (c) => {
         input_preview:
           typeof body.input === "string" ? body.input.slice(0, 100) : undefined,
         tools_count: body.tools?.length || 0,
+        mcp_tools: body.tools?.filter(t => t.type === 'mcp' || t.mcp_server)?.length || 0,
         prompt_cache_key: body.prompt_cache_key || "not set",
         reasoning: body.reasoning ? JSON.stringify(body.reasoning) : "not set",
         text: body.text ? JSON.stringify(body.text) : "not set",
@@ -82,7 +83,9 @@ app.post("/v1/responses", async (c) => {
         stream: anthropicReq.stream,
         messages_count: anthropicReq.messages?.length,
         system: anthropicReq.system ? "yes" : "no",
-        tools: anthropicReq.tools ? "yes" : "no",
+        tools_count: anthropicReq.tools?.length || 0,
+        mcp_servers_count: anthropicReq.mcp_servers?.length || 0,
+        mcp_servers: anthropicReq.mcp_servers,
         thinking: anthropicReq.thinking
           ? JSON.stringify(anthropicReq.thinking)
           : "no",

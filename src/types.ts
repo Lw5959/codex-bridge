@@ -47,6 +47,13 @@ export interface Tool {
   description?: string;
   parameters?: object;
   format?: { syntax?: string };
+  mcp_server?: MCPServerConfig;
+}
+
+export interface MCPServerConfig {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
 }
 
 export interface CodexSSEEvent {
@@ -74,11 +81,19 @@ export interface AnthropicRequest {
   stream: boolean;
   tools?: unknown[];
   tool_choice?: unknown;
+  mcp_servers?: MCPServer[];
   thinking?: { type: 'enabled'; budget_tokens: number };
   reasoning_effort?: string;
   temperature?: number;
   top_p?: number;
   metadata?: Record<string, unknown>;
+}
+
+export interface MCPServer {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
 }
 
 // OpenAI Responses output types
