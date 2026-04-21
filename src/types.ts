@@ -11,6 +11,7 @@ export interface CodexResponsesRequest {
   top_p?: number;
   previous_response_id?: string;
   reasoning?: { effort: string; summary?: string };
+  stop?: string | string[];
   prompt_cache_key?: string;
   store?: boolean;
   text?: { format?: any; verbosity?: string };
@@ -46,6 +47,7 @@ export interface Tool {
   function?: { name?: string; description?: string; parameters?: object };
   description?: string;
   parameters?: object;
+  input_schema?: Record<string, unknown>;
   format?: { syntax?: string };
   mcp_server?: MCPServerConfig;
 }
@@ -86,6 +88,7 @@ export interface AnthropicRequest {
   reasoning_effort?: string;
   temperature?: number;
   top_p?: number;
+  stop_sequences?: string[];
   metadata?: Record<string, unknown>;
 }
 
@@ -99,7 +102,8 @@ export interface MCPServer {
 // OpenAI Responses output types
 export interface OutputContentBlock {
   type: string;
-  text: string;
+  text?: string;
+  data?: string;
   annotations?: any[];
 }
 

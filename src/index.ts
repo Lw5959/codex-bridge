@@ -49,6 +49,7 @@ app.post("/v1/responses", async (c) => {
   logger.info(`[${reqId}] >>> POST /v1/responses`);
   try {
     const body = await c.req.json<CodexResponsesRequest>();
+    logger.info(`[${reqId}] Request full body: ${JSON.stringify(body)}`);
     logger.info(
       `[${reqId}] Request body: ${JSON.stringify({
         model: body.model,
@@ -77,6 +78,7 @@ app.post("/v1/responses", async (c) => {
       DEFAULT_REASONING_EFFORT,
     );
     logger.info(`[${reqId}] Anthropic request model: ${modelId}`);
+    logger.info(`[${reqId}] Anthropic request full body: ${JSON.stringify(anthropicReq)}`);
     logger.info(
       `[${reqId}] Anthropic request body: ${JSON.stringify({
         model: anthropicReq.model,
@@ -120,9 +122,9 @@ app.post("/v1/responses", async (c) => {
                     status: "queued",
                     model: body.model || modelId,
                     output: [],
-                    parallel_tool_calls: false,
-                    tool_choice: "auto",
-                    tools: [],
+                    parallel_tool_calls: body.parallel_tool_calls ?? false,
+                    tool_choice: body.tool_choice || "auto",
+                    tools: body.tools || [],
                   },
                   sequence_number: 0,
                   type: "response.created",
@@ -191,6 +193,32 @@ app.post("/v1/responses", async (c) => {
                         type: "response.output_item.added",
                       }),
                     );
+                  } else if (block?.type === "thinking") {
+                    const msgId = handler.messageId;
+                    write(
+                      sseEvent("response.output_item.added", {
+                        item: {
+                          id: msgId,
+                          content: [],
+                          role: "assistant",
+                          status: "in_progress",
+                          type: "message",
+                        },
+                        output_index: 0,
+                        sequence_number: seq++,
+                        type: "response.output_item.added",
+                      }),
+                    );
+                    write(
+                      sseEvent("response.content_part.added", {
+                        content_index: 0,
+                        item_id: msgId,
+                        output_index: 0,
+                        part: { type: "reasoning_summary_text", text: "" },
+                        sequence_number: seq++,
+                        type: "response.content_part.added",
+                      }),
+                    );
                   }
                 } else if (eventType === "content_block_delta") {
                   const delta = (event as any).delta;
@@ -207,6 +235,20 @@ app.post("/v1/responses", async (c) => {
                         output_index: 0,
                         sequence_number: seq++,
                         type: "response.output_text.delta",
+                      }),
+                    );
+                  } else if (
+                    delta?.type === "thinking_delta" &&
+                    typeof delta.thinking === "string"
+                  ) {
+                    write(
+                      sseEvent("response.reasoning_summary_text.delta", {
+                        content_index: 0,
+                        delta: delta.thinking,
+                        item_id: handler.messageId,
+                        summary_index: 0,
+                        sequence_number: seq++,
+                        type: "response.reasoning_summary_text.delta",
                       }),
                     );
                   }
@@ -239,15 +281,19 @@ app.post("/v1/responses", async (c) => {
                   response: {
                     id: handler.responseId,
                     created_at: createdAt,
-                    model: body.model || modelId,
+                    model: finalMessage.model || body.model || modelId,
                     object: "response",
                     output: finalItems,
-                    status: "completed",
+                    status: finalMessage.stop_reason === 'max_tokens' ? 'incomplete' : 'completed',
                     usage: {
                       input_tokens: inputTokens,
                       output_tokens: outputTokens,
                       total_tokens: inputTokens + outputTokens,
-                      input_tokens_details: { cached_tokens: 0 },
+                      input_tokens_details: {
+                        cached_tokens:
+                          (finalMessage.usage?.cache_read_input_tokens || 0) +
+                          (finalMessage.usage?.cache_creation_input_tokens || 0),
+                      },
                       output_tokens_details: { reasoning_tokens: 0 },
                       x_details: [
                         {
@@ -258,9 +304,9 @@ app.post("/v1/responses", async (c) => {
                         },
                       ],
                     },
-                    parallel_tool_calls: false,
-                    tool_choice: "auto",
-                    tools: [],
+                    parallel_tool_calls: body.parallel_tool_calls ?? false,
+                    tool_choice: body.tool_choice || "auto",
+                    tools: body.tools || [],
                   },
                   sequence_number: seq++,
                   type: "response.completed",
@@ -301,7 +347,7 @@ app.post("/v1/responses", async (c) => {
     logger.info(`[${reqId}] >>> Non-streaming mode`);
     const result = await anthropic.messages.create(anthropicReq as any);
     logger.info(`[${reqId}] Non-streaming response received`);
-    return c.json(transformResponse(result, body.model || modelId));
+    return c.json(transformResponse(result, body.model || modelId, body.tools, body.tool_choice as string, body.parallel_tool_calls));
   } catch (err: any) {
     logger.error(`[${reqId}] Request error:`, err);
     return c.json(

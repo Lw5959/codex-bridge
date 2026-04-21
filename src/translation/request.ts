@@ -44,10 +44,27 @@ function inputItemsToAnthropicMessages(input: CodexInputItem[] | string | undefi
         messages.push({ role: oaiRole, content: blocks });
       }
     } else if (item.type === 'function_call') {
+      // For MCP namespace tools, the name is just the namespace prefix and the actual
+      // function name is in arguments.cmd. We need to construct the full tool name
+      // that matches what was sent in the tools array.
+      let toolName = item.name || '';
+      if (item.arguments) {
+        try {
+          const args = JSON.parse(item.arguments);
+          if (args.cmd && typeof args.cmd === 'string') {
+            // If cmd doesn't already start with the namespace prefix, prepend it
+            if (!toolName || !args.cmd.startsWith(toolName)) {
+              // Remove trailing __ from namespace to avoid triple underscores
+              const ns = toolName.replace(/__$/, '');
+              toolName = ns ? `${ns}__${args.cmd}` : args.cmd;
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      }
       const toolUse: AnthropicContentBlock = {
         type: 'tool_use',
         id: item.call_id || '',
-        name: item.name || '',
+        name: toolName,
         input: (() => {
           try { return item.arguments ? JSON.parse(item.arguments) : {}; } catch { return {}; }
         })(),
@@ -76,6 +93,33 @@ function inputItemsToAnthropicMessages(input: CodexInputItem[] | string | undefi
   return messages;
 }
 
+function convertTool(t: any): unknown | null {
+  // Skip MCP server tools (handled separately)
+  if (t.type === 'mcp' || t.mcp_server) return null;
+  // Skip web_search tools
+  if (t.type === 'web_search') return null;
+
+  const fn: any = {
+    name: t.name || t.function?.name || '',
+    description: t.description || t.function?.description || '',
+  };
+  if (t.input_schema) {
+    fn.input_schema = t.input_schema;
+  } else if (t.parameters || t.function?.parameters) {
+    fn.input_schema = t.parameters || t.function?.parameters;
+  } else if (t.type === 'custom' && t.format) {
+    fn.input_schema = {
+      type: 'object',
+      properties: { _raw_format: { type: 'string', description: t.format?.syntax || '' } },
+      required: [],
+    };
+  } else {
+    fn.input_schema = { type: 'object', properties: {} };
+  }
+
+  return fn.name ? fn : null;
+}
+
 function convertTools(tools: any[] | undefined): { tools: unknown[]; mcpServers: MCPServer[] } {
   const resultTools: unknown[] = [];
   const mcpServers: MCPServer[] = [];
@@ -97,30 +141,24 @@ function convertTools(tools: any[] | undefined): { tools: unknown[]; mcpServers:
       continue;
     }
 
-    // Skip web_search tools (not supported by Anthropic)
-    if (t.type === 'web_search') continue;
+    // Handle namespace tools: expand nested tools with prefixed names
+    if (t.type === 'namespace' && Array.isArray(t.tools)) {
+      // Strip trailing __ from namespace name to avoid triple+ underscores
+      const nsPrefix = (t.name || '').replace(/__$/, '');
+      for (const nestedTool of t.tools) {
+        const baseName = nestedTool.name || nestedTool.function?.name || '';
+        const converted = convertTool({
+          ...nestedTool,
+          name: nsPrefix ? `${nsPrefix}__${baseName}` : baseName,
+        });
+        if (converted) resultTools.push(converted);
+      }
+      continue;
+    }
 
     // Convert regular function tools
-    const fn: any = {
-      name: t.name || t.function?.name || '',
-      description: t.description || t.function?.description || '',
-    };
-    if (t.parameters || t.function?.parameters) {
-      fn.input_schema = t.parameters || t.function?.parameters;
-    } else if (t.type === 'custom' && t.format) {
-      fn.input_schema = {
-        type: 'object',
-        properties: { _raw_format: { type: 'string', description: t.format?.syntax || '' } },
-        required: [],
-      };
-    } else {
-      fn.input_schema = { type: 'object', properties: {} };
-    }
-
-    // Only add if has a valid name
-    if (fn.name) {
-      resultTools.push(fn);
-    }
+    const converted = convertTool(t);
+    if (converted) resultTools.push(converted);
   }
 
   return { tools: resultTools, mcpServers };
@@ -197,6 +235,11 @@ export function translateCodexToAnthropicRequest(
   // Temperature / top_p
   if (req.temperature !== undefined) body.temperature = req.temperature;
   if (req.top_p !== undefined) body.top_p = req.top_p;
+
+  // Stop sequences
+  if (req.stop !== undefined) {
+    body.stop_sequences = Array.isArray(req.stop) ? req.stop : [req.stop];
+  }
 
   // Metadata
   const metadata: Record<string, unknown> = {};

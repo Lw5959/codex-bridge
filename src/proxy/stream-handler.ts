@@ -47,6 +47,10 @@ export function createStreamHandler(): StreamHandler {
             accumulatedItems.set(idx, { type: 'text', text: '', blockId: block.id });
           } else if (block?.type === 'tool_use') {
             accumulatedItems.set(idx, { type: 'tool_use', text: '', name: block.name || '', inputText: '', blockId: block.id });
+          } else if (block?.type === 'thinking') {
+            accumulatedItems.set(idx, { type: 'thinking', text: '', blockId: block.id });
+          } else if (block?.type === 'redacted_thinking') {
+            accumulatedItems.set(idx, { type: 'redacted_thinking', text: block.data || '', blockId: block.id });
           }
           break;
         }
@@ -61,6 +65,8 @@ export function createStreamHandler(): StreamHandler {
             item.text += delta.text;
           } else if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
             item.inputText = (item.inputText || '') + delta.partial_json;
+          } else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+            item.text += delta.thinking;
           }
           break;
         }
@@ -113,6 +119,33 @@ export function createStreamHandler(): StreamHandler {
               arguments: JSON.stringify(args),
               call_id: item.blockId || '',
             });
+          } else if (item.type === 'thinking' && item.text) {
+            const reasoningItem: OutputItem = {
+              type: 'message',
+              id: messageId,
+              status: 'completed',
+              role: 'assistant',
+              content: [{ type: 'reasoning_summary_text', text: item.text }],
+            };
+            outputItems.push(reasoningItem);
+            events.push({
+              eventType: 'response.reasoning_summary_text.done',
+              data: {
+                summary_index: 0,
+                text: item.text,
+                item_id: messageId,
+                type: 'response.reasoning_summary_text.done',
+              },
+            });
+          } else if (item.type === 'redacted_thinking') {
+            const redactedItem: OutputItem = {
+              type: 'message',
+              id: messageId,
+              status: 'completed',
+              role: 'assistant',
+              content: [{ type: 'redacted_thinking', data: item.text }],
+            };
+            outputItems.push(redactedItem);
           }
 
           const outputItem = outputItems[outputItems.length - 1];
